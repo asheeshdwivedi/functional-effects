@@ -12,10 +12,41 @@ object Looping extends ZIOAppDefault {
    * Implement a `repeat` combinator using `flatMap` (or `zipRight`) and recursion.
    */
   def repeat[R, E, A](n: Int)(effect: ZIO[R, E, A]): ZIO[R, E, Chunk[A]] =
-    ???
+    if (n <= 0) ZIO.succeed(Chunk.empty)
+    else {
+      effect.zipWith(repeat(n - 1)(effect))((a, as) => Chunk(a) ++ as)
+      //for {
+      //  value <- effect
+      //  rest  <- repeat(n - 1)(effect)
+      //} yield Chunk(value) ++ rest
+    }
+
+  def repeatRef[R, E, A](n: Int)(effect: ZIO[R, E, A]): ZIO[R, E, Chunk[A]] = {
+    def repeat1(result: Ref[Chunk[A]], reminder: Ref[Int]): ZIO[R, E, Boolean] =
+      for {
+        n <- reminder.get
+        b <- if (n > 0)
+              for {
+                a <- effect
+                - <- reminder.update(_ - 1)
+                - <- result.update(_ :+ a)
+              } yield true
+            else ZIO.succeed(false)
+      } yield b
+
+    for {
+      result <- Ref.make(Chunk.empty[A])
+      ref    <- Ref.make(n)
+      _      <- repeat1(result, ref).repeatWhile(_ == true)
+      chunk  <- result.get
+    } yield chunk
+
+  }
+
+  def repeatCollect[R, E, A](n: Int)(effect: ZIO[R, E, A]): ZIO[R, E, Chunk[Either[E, A]]] = repeat(n)(effect.either)
 
   val run =
-    repeat(100)(Console.printLine("All work and no play makes Jack a dull boy"))
+    repeatRef(100)(Console.printLine("All work and no play makes Jack a dull boy"))
 }
 
 object Interview extends ZIOAppDefault {
@@ -35,8 +66,12 @@ object Interview extends ZIOAppDefault {
    */
   def getAllAnswers(questions: List[String]): ZIO[Any, IOException, List[String]] =
     questions match {
-      case Nil     => ???
-      case q :: qs => ???
+      case Nil     => ZIO.succeed(List.empty)
+      case q :: qs => (Console.printLine(q) *> Console.readLine("> ")).zipWith(getAllAnswers(qs))((a, as) => a :: as)
+      //for {
+      //  a  <- Console.printLine(q) *> Console.readLine("> ")
+      //  as <- getAllAnswers(qs)
+      //} yield a :: as
     }
 
   /**
@@ -45,8 +80,7 @@ object Interview extends ZIOAppDefault {
    * Use the preceding `getAllAnswers` function, together with the predefined
    * `questions`, to ask the user a bunch of questions, and print the answers.
    */
-  val run =
-    ???
+  val run = getAllAnswers(questions).tap(l => Console.printLine(l))
 }
 
 object InterviewGeneric extends ZIOAppDefault {
@@ -65,12 +99,16 @@ object InterviewGeneric extends ZIOAppDefault {
    */
   def iterateAndCollect[R, E, A, B](as: List[A])(f: A => ZIO[R, E, B]): ZIO[R, E, List[B]] =
     as match {
-      case Nil     => ???
-      case a :: as => ???
+      case Nil => ZIO.succeed(List.empty)
+      case a :: as =>
+        for {
+          b  <- f(a)
+          bs <- iterateAndCollect(as)(f)
+        } yield b :: bs
     }
 
-  val run =
-    ???
+  val run = iterateAndCollect(questions)(a => Console.printLine(a) *> Console.readLine("> "))
+    .tap(Console.printLine(_))
 }
 
 object InterviewForeach extends ZIOAppDefault {
@@ -89,8 +127,8 @@ object InterviewForeach extends ZIOAppDefault {
    * (`Console.readLine`), and collect all answers into a collection. Finally, print
    * out the contents of the collection.
    */
-  val run =
-    ???
+  val run = ZIO.foreach(questions)(a => Console.printLine(a) *> Console.readLine("> ")).tap(Console.printLine(_))
+
 }
 
 object WhileLoop extends ZIOAppDefault {
@@ -102,7 +140,15 @@ object WhileLoop extends ZIOAppDefault {
    * application runs correctly.
    */
   def whileLoop[R, E, A](cond: UIO[Boolean])(zio: ZIO[R, E, A]): ZIO[R, E, Chunk[A]] =
-    ???
+    for {
+      continue <- cond
+      chunk <- if (continue)
+                for {
+                  a  <- zio
+                  as <- whileLoop(cond)(zio)
+                } yield a +: as
+              else ZIO.succeed(Chunk.empty)
+    } yield chunk
 
   val run = {
     def loop(variable: Ref[Int]) =
@@ -130,12 +176,11 @@ object Iterate extends ZIOAppDefault {
    * evaluates to false, returning the "last" value of type `A`.
    */
   def iterate[R, E, A](start: A)(cond: A => Boolean)(f: A => ZIO[R, E, A]): ZIO[R, E, A] =
-    ???
+    if (cond(start)) f(start).flatMap(iterate(_)(cond)(f))
+    else f(start)
 
   val run =
-    iterate(0)(_ < 100) { i =>
-      Console.printLine(s"At iteration: ${i}").as(i + 1)
-    }
+    iterate(0)(_ < 100)(i => Console.printLine(s"At iteration: ${i}").as(i + 1)).tap(Console.printLine(_))
 }
 
 object TailRecursive extends ZIOAppDefault {
@@ -161,12 +206,16 @@ object TailRecursive extends ZIOAppDefault {
    * recursive.
    */
   lazy val webserver: Task[Nothing] =
-    for {
+    (for {
       request  <- acceptRequest
       response <- handleRequest(request)
       _        <- request.returnResponse(response)
-      nothing  <- webserver
-    } yield nothing
+    } yield ()).forever // use forever
+
+  lazy val webserver_v2: Task[Int] = acceptRequest.flatMap(request =>
+    handleRequest(request).flatMap(response => request.returnResponse(response).flatMap(_ => webserver_v2))
+  // last webserver_v2 is not mapped/flatmapped which help it not to materlized instead made this as tailrec
+  )
 
   val run =
     (for {
