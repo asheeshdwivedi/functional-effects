@@ -2,7 +2,17 @@ package net.degoes.zio
 
 import zio._
 
+import java.io.IOException
+
 object ForkJoin extends ZIOAppDefault {
+
+  def parallel[A, B](left: Task[A], right: Task[B]): Task[(A, B)] =
+    for {
+      lFib <- left.fork
+      rFib <- right.fork
+      a    <- lFib.join
+      b    <- rFib.join
+    } yield (a, b)
 
   val printer =
     Console.printLine(".").repeat(Schedule.recurs(10))
@@ -14,8 +24,12 @@ object ForkJoin extends ZIOAppDefault {
    * print out a message, "Forked", then join the fiber using `Fiber#join`,
    * and finally, print out a message "Joined".
    */
-  val run =
-    printer
+  //ZIO.fiberIdWith(Console.printLine(_)) *> printer
+  val run = for {
+    fiber <- printer.fork
+    _     <- Fiber.dumpAllWith(Console.printLine(_))
+    _     <- fiber.dump.debug("Fiber dump!!")
+  } yield ()
 }
 
 object ForkInterrupt extends ZIOAppDefault {
@@ -32,7 +46,13 @@ object ForkInterrupt extends ZIOAppDefault {
    * finally, print out a message "Interrupted".
    */
   val run =
-    (infinitePrinter *> ZIO.sleep(10.millis))
+    for {
+      fib  <- infinitePrinter.fork
+      _    <- Console.printLine("Forked!!!")
+      -    <- ZIO.sleep(10.millis)
+      exit <- fib.interrupt
+      _    <- Console.printLine(s"Interrupted! $exit")
+    } yield ()
 }
 
 object ParallelFib extends ZIOAppDefault {
@@ -47,7 +67,7 @@ object ParallelFib extends ZIOAppDefault {
       if (n <= 1) ZIO.succeed(n)
       else
         ZIO.suspendSucceed {
-          loop(n - 1, original).zipWith(loop(n - 2, original))(_ + _)
+          loop(n - 1, original).zipWithPar(loop(n - 2, original))(_ + _)
         }
 
     loop(n, n)
@@ -65,6 +85,7 @@ object ParallelFib extends ZIOAppDefault {
 }
 
 object TimeoutExample extends ZIOAppDefault {
+
   def fib(n: Int): UIO[Int] =
     if (n <= 1) ZIO.succeed(n)
     else
@@ -80,7 +101,10 @@ object TimeoutExample extends ZIOAppDefault {
    *
    * Print out a message if it timed out.
    */
-  lazy val run = fib(20)
+  lazy val run = fib(30).timeout(1.millis).flatMap {
+    case None        => Console.printLine("It timed out!")
+    case Some(value) => Console.printLine(s"The fibonacci number is ${value}")
+  }
 }
 
 object RaceExample extends ZIOAppDefault {
@@ -95,9 +119,10 @@ object RaceExample extends ZIOAppDefault {
    *
    * Use `ZIO#race` to race the preceding two tasks and print out the
    * winning success value.
+   * // effect with either to on race can give you first success or failure result
    *
    */
-  lazy val run = ???
+  lazy val run = loadFromCache.either.race(loadFromDB.either).flatMap(Console.printLine(_))
 }
 
 object AlarmAppImproved extends ZIOAppDefault {
@@ -122,6 +147,9 @@ object AlarmAppImproved extends ZIOAppDefault {
     } yield duration
   }
 
+  val infinitePrinter: ZIO[Any, IOException, Nothing] = (Console.printLine(".") *> ZIO.sleep(1.second)).forever
+  val printWakeUp                                     = Console.printLine("Time to wakeup!!!")
+
   /**
    * EXERCISE
    *
@@ -131,7 +159,26 @@ object AlarmAppImproved extends ZIOAppDefault {
    * prints out a wakeup alarm message, like "Time to wakeup!!!".
    */
   val run =
-    ???
+    for {
+      duration <- getAlarmDuration
+      printer  <- infinitePrinter.fork
+      _        <- ZIO.sleep(duration) *> printer.interrupt *> printWakeUp
+    } yield ()
+
+  //for {
+  //  duration <- getAlarmDuration
+  //  _        <- infinitePrinter.race(printWakeUp.delay(duration))
+  //} yield ()
+
+  //for {
+  //  duration <- getAlarmDuration
+  //  fiberA   <- ZIO.sleep(duration).fork
+  //  fiberB   <- Console.printLine(".").repeat(Schedule.linear(1.second)).fork
+  //  _        <- fiberA.join
+  //  _        <- fiberB.interrupt
+  //  _ <- Console.printLine("Time to wakeup!!!!")
+  //} yield ()
+
 }
 
 object ParallelZip extends ZIOAppDefault {
@@ -149,8 +196,10 @@ object ParallelZip extends ZIOAppDefault {
    * Compute fib(10) and fib(13) in parallel using `ZIO#zipPar`, and display
    * the result.
    */
-  val run =
-    ???
+  val run = for {
+    fib <- fib(10).zipPar(fib(13))
+    _   <- Console.printLine(s"fib(10) : ${fib._1} and fib(13) : ${fib._2}")
+  } yield ()
 }
 
 /**
@@ -159,9 +208,6 @@ object ParallelZip extends ZIOAppDefault {
  */
 object RefExample extends ZIOAppDefault {
   import zio.Random._
-
-  import zio.Clock._
-  import zio.stm._
 
   /**
    * Some state to keep track of all points inside a circle,
@@ -218,7 +264,7 @@ object PromiseExample extends ZIOAppDefault {
    * Do some computation that produces an integer. When yare done, complete
    * the promise with `Promise#succeed`.
    */
-  def doCompute(result: Promise[Nothing, Int]): UIO[Unit] = ???
+  def doCompute(result: Promise[Nothing, Int]): UIO[Unit] = result.succeed(42).unit
 
   /**
    * EXERCISE
@@ -227,7 +273,13 @@ object PromiseExample extends ZIOAppDefault {
    * that it can use, and then wait for the promise to be completed,
    * using `Promise#await`.
    */
-  lazy val waitForCompute: ZIO[Any, Nothing, Unit] = ???
+  lazy val waitForCompute: ZIO[Any, IOException, Unit] = for {
+    promise <- Promise.make[Nothing, Int]
+    _       <- doCompute(promise).fork
+    _       <- Console.printLine("Started computation on the background")
+    value   <- promise.await
+    _       <- Console.printLine(s"Fiber is completed with the value ${value}")
+  } yield ()
 
   val run =
     waitForCompute
