@@ -4,12 +4,29 @@ import zio._
 
 object Retry {
 
+  //Schedule[-Env, -In, +Out]
+
+  //Schedule A : |XXXXXXXX|            |XXXXXX|                |XXXXXXX|          |XXX|    |XX|
+  //Schedule B :     |XXXX|    |XXXX|       |XXXXXX|               |XXX|         |XX|
+  //A isect  B :     |XXXX|                 |X|                    |XXX|           |X|
+  //A union  B : |XXXXXXXX|    |XXXX|  |XXXXXX|                |XXXXXXX|         |XXXX|    |XX|
+
+  val policy = (Schedule.recurs(100) &&
+    Schedule
+      .exponential(10.millis)
+      .whileOutput(_ < 5.second)
+      .andThen(
+        Schedule.fixed(30.second) && Schedule.recurs(20)
+      )).jittered.tapInput((input: Exception) => ZIO.logError(input.toString()))
+
+  Console.printLine("foo").retry(policy)
+
   /**
    * EXERCISE
    *
    * Using `Schedule.recurs`, create a schedule that recurs 5 times.
    */
-  val fiveTimes: Schedule[Any, Any, Int] = ???
+  val fiveTimes = Schedule.recurs(5)
 
   /**
    * EXERCISE
@@ -17,14 +34,14 @@ object Retry {
    * Using the `ZIO.repeat`, repeat printing "Hello World" five times to the
    * console.
    */
-  val repeated1 = ???
+  val repeated1 = Console.printLine("Hello World").repeat(Schedule.recurs(5))
 
   /**
    * EXERCISE
    *
    * Using `Schedule.spaced`, create a schedule that recurs forever every 1 second.
    */
-  val everySecond = ???
+  val everySecond = Schedule.spaced(1.second)
 
   /**
    * EXERCISE
@@ -33,7 +50,7 @@ object Retry {
    * and the `everySecond` schedule, create a schedule that repeats fives times,
    * evey second.
    */
-  val fiveTimesEverySecond = ???
+  val fiveTimesEverySecond = Schedule.recurs(5) && Schedule.spaced(1.second)
 
   /**
    * EXERCISE
@@ -41,7 +58,7 @@ object Retry {
    * Using the `ZIO#repeat`, repeat the action Console.printLine("Hi hi") using
    * `fiveTimesEverySecond`.
    */
-  val repeated2 = ???
+  val repeated2 = Console.printLine("Hi hi").repeat(Schedule.recurs(5) && Schedule.spaced(1.second))
 
   /**
    * EXERCISE
@@ -50,7 +67,7 @@ object Retry {
    * schedule, create a schedule that repeats fives times rapidly, and then
    * repeats every second forever.
    */
-  val fiveTimesThenEverySecond = ???
+  val fiveTimesThenEverySecond = Schedule.recurs(5).andThen(Schedule.spaced(1.second))
 
   /**
    * EXERCISE
@@ -58,7 +75,7 @@ object Retry {
    * Using `ZIO#retry`, retry the following error a total of five times.
    */
   val error1   = ZIO.fail("Uh oh!")
-  val retried5 = ???
+  val retried5 = error1.repeat(Schedule.recurs(5))
 
   /**
    * EXERCISE
@@ -67,7 +84,7 @@ object Retry {
    * schedule, create a schedule that repeats the minimum of five times and
    * every second.
    */
-  val fiveTimesOrEverySecond = ???
+  val fiveTimesOrEverySecond = Schedule.recurs(5) || Schedule.spaced(1.second)
 
   /**
    * EXERCISE
@@ -75,7 +92,7 @@ object Retry {
    * Using `Schedule.exponential`, create an exponential schedule that starts
    * from 10 milliseconds.
    */
-  val exponentialSchedule = ???
+  val exponentialSchedule = Schedule.exponential(10.millis)
 
   /**
    * EXERCISE
@@ -90,7 +107,7 @@ object Retry {
    * Using `Schedule.whileOutput`, produce a filtered schedule from `Schedule.forever`
    * that will halt when the number of recurrences exceeds 100.
    */
-  val oneHundred = ???
+  val oneHundred = Schedule.forever.whileOutput(_ <= 100)
 
   /**
    * EXERCISE
